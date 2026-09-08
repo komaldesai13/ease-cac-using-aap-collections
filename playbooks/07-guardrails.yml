@@ -1,0 +1,131 @@
+---
+# ═══════════════════════════════════════════════════════════════════════════
+# SCENARIO 07 — Platform guardrails: settings and feature flags
+#
+# THE STORY
+#   Compliance baselines are usually a PDF. "Session timeout must be 30 minutes"
+#   sits in a document, and whether it is actually 30 minutes is anyone's guess
+#   until an audit.
+#
+#   The settings module makes the baseline executable, and it reports the old
+#   and new value so the change is self-documenting.
+#
+# SAFETY
+#   This playbook reads the current value first, applies the baseline, proves
+#   idempotency, and then restores whatever it found — including when a task
+#   fails partway through. A shared demo pod is handed back exactly as found.
+#
+# Run: ansible-playbook playbooks/07-guardrails.yml
+# ═══════════════════════════════════════════════════════════════════════════
+- name: "07 | Guardrails — compliance settings as executable policy"
+  hosts: aap_local
+  gather_facts: false
+
+  vars_files:
+    - ../vars/guardrails.yml
+
+  vars:
+    setting_name: SESSION_COOKIE_AGE
+    baseline_value: "{{ demo_settings.SESSION_COOKIE_AGE }}"
+    aap: &aap
+      aap_hostname: "{{ aap_gateway.hostname }}"
+      aap_username: "{{ aap_gateway.username }}"
+      aap_password: "{{ aap_gateway.password }}"
+      aap_validate_certs: "{{ aap_gateway.validate_certs }}"
+      aap_request_timeout: "{{ aap_gateway.request_timeout }}"
+
+  tasks:
+    - name: Banner
+      ansible.builtin.include_tasks: ../tasks/banner.yml
+      vars:
+        banner_title: "07 — PLATFORM GUARDRAILS"
+        banner_lines:
+          - "Baseline control: {{ setting_name }} = {{ baseline_value }}"
+          - "Original value will be restored before this playbook exits."
+
+    - name: Guardrail block
+      block:
+        # check_mode gives us a read: the module reports old_values without
+        # writing anything.
+        - name: Read the current value without changing it
+          ansible.platform.settings:
+            settings:
+              SESSION_COOKIE_AGE: "{{ baseline_value }}"
+            <<: *aap
+          check_mode: true
+          register: current_state
+
+        - name: Remember what we found
+          ansible.builtin.set_fact:
+            original_value: "{{ current_state.settings.old_values[setting_name] }}"
+
+        - name: Report the gap between policy and reality
+          ansible.builtin.debug:
+            msg:
+              - "Policy says   : {{ setting_name }} = {{ baseline_value }}"
+              - "Reality is    : {{ setting_name }} = {{ original_value }}"
+              - "Compliant     : {{ original_value | string == baseline_value | string }}"
+
+        - name: Enforce the baseline
+          ansible.platform.settings:
+            settings:
+              SESSION_COOKIE_AGE: "{{ baseline_value }}"
+            <<: *aap
+          register: enforced
+          when: original_value | string != baseline_value | string
+
+        - name: Show the self-documenting before/after
+          ansible.builtin.debug:
+            msg:
+              - "Changed from : {{ enforced.settings.old_values[setting_name] }}"
+              - "Changed to   : {{ enforced.settings.new_values[setting_name] }}"
+          when: enforced is not skipped
+
+        - name: Re-apply the baseline to prove enforcement is idempotent
+          ansible.platform.settings:
+            settings:
+              SESSION_COOKIE_AGE: "{{ baseline_value }}"
+            <<: *aap
+          register: enforce_again
+
+        - name: A compliant platform reports no change
+          ansible.builtin.assert:
+            that:
+              - enforce_again is not changed
+            success_msg: >-
+              Already compliant, so nothing to do. Schedule this nightly and any
+              non-zero changed count is a real finding.
+
+        # ── Feature flags: report, don't flip ────────────────────────────────
+        # Flipping product feature flags on a shared demo pod is rude. Reading
+        # them makes the same point: the flag state is inspectable as data.
+        - name: Read feature flag state
+          ansible.platform.feature_flag:
+            name: "{{ item }}"
+            state: exists
+            <<: *aap
+          loop: "{{ demo_feature_flags_to_report }}"
+          loop_control:
+            label: "{{ item }}"
+          register: flag_states
+          failed_when: false
+
+        - name: Feature flag inventory
+          ansible.builtin.debug:
+            msg: "{{ item.item }} -> {{ 'present' if item.exists | default(false) else 'not set on this build' }}"
+          loop: "{{ flag_states.results }}"
+          loop_control:
+            label: "{{ item.item }}"
+
+      always:
+        - name: Restore the original value — always, even if something above failed
+          ansible.platform.settings:
+            settings:
+              SESSION_COOKIE_AGE: "{{ original_value }}"
+            <<: *aap
+          when: original_value is defined
+          register: restored
+
+        - name: Confirm the environment was handed back unchanged
+          ansible.builtin.debug:
+            msg: "{{ setting_name }} restored to {{ original_value | default('(never read)') }}"

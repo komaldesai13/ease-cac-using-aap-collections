@@ -1,0 +1,115 @@
+---
+# ═══════════════════════════════════════════════════════════════════════════
+# SCENARIO 01 — Day-one tenant onboarding
+#
+# THE STORY
+#   A new business unit needs somewhere to work in AAP: organizations, teams,
+#   and people. Done by hand this is a form-filling afternoon, and the person
+#   who did it is the only one who knows what they clicked.
+#
+#   Here it is one file (vars/tenant.yml) and one command. The playbook never
+#   changes; the data does.
+#
+# WHAT TO SAY WHILE IT RUNS
+#   "Notice there is no 'create org' logic in here. I'm not telling AAP how to
+#    build this — I'm telling it what should exist. The module works out the
+#    difference."
+#
+# Run: ansible-playbook playbooks/01-tenant-onboarding.yml
+# ═══════════════════════════════════════════════════════════════════════════
+- name: "01 | Tenant onboarding — organizations, teams and people from one file"
+  hosts: aap_local
+  gather_facts: false
+
+  vars_files:
+    - ../vars/tenant.yml
+
+  vars:
+    aap: &aap
+      aap_hostname: "{{ aap_gateway.hostname }}"
+      aap_username: "{{ aap_gateway.username }}"
+      aap_password: "{{ aap_gateway.password }}"
+      aap_validate_certs: "{{ aap_gateway.validate_certs }}"
+      aap_request_timeout: "{{ aap_gateway.request_timeout }}"
+
+  tasks:
+    - name: Banner
+      ansible.builtin.include_tasks: ../tasks/banner.yml
+      vars:
+        banner_title: "01 — TENANT ONBOARDING"
+        banner_lines:
+          - "Declaring {{ demo_organizations | length }} organizations, {{ demo_teams | length }} teams, {{ demo_users | length }} users"
+          - "Source of truth: vars/tenant.yml"
+
+    # ── Organizations ────────────────────────────────────────────────────────
+    - name: Ensure organizations exist
+      ansible.platform.organization:
+        name: "{{ item.name }}"
+        description: "{{ item.description }}"
+        state: present
+        <<: *aap
+      loop: "{{ demo_organizations }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: org_results
+
+    # ── Teams ────────────────────────────────────────────────────────────────
+    # The organization is referenced by name. No ID lookup, no ordering
+    # problem, no "create the org first and paste its ID here" step.
+    - name: Ensure teams exist in their organizations
+      ansible.platform.team:
+        name: "{{ item.name }}"
+        organization: "{{ item.organization }}"
+        description: "{{ item.description }}"
+        state: present
+        <<: *aap
+      loop: "{{ demo_teams }}"
+      loop_control:
+        label: "{{ item.name }} -> {{ item.organization }}"
+      register: team_results
+
+    # ── People ───────────────────────────────────────────────────────────────
+    # No `password:` here, deliberately. These accounts authenticate through the
+    # authenticator configured in scenario 04, so there is no secret to leak and
+    # nothing to rotate. "What's your password policy?" becomes "we don't store
+    # passwords" — the best answer available.
+    #
+    # If a demo account does need a local password, add it like this and pair it
+    # with update_secrets: false, or the task reports changed on every single run
+    # and your pipeline can never go green:
+    #
+    #     password: "{{ vault_demo_password }}"
+    #     update_secrets: false
+    #
+    - name: Ensure users exist and are in the right organizations
+      ansible.platform.user:
+        username: "{{ item.username }}"
+        email: "{{ item.email }}"
+        first_name: "{{ item.first_name }}"
+        last_name: "{{ item.last_name }}"
+        is_platform_auditor: "{{ item.is_platform_auditor | default(false) }}"
+        organizations: "{{ item.organizations }}"
+        state: present
+        <<: *aap
+      loop: "{{ demo_users }}"
+      loop_control:
+        label: "{{ item.username }}"
+      register: user_results
+
+    # ── Proof ────────────────────────────────────────────────────────────────
+    - name: Confirm every declared resource now exists
+      ansible.builtin.assert:
+        that:
+          - org_results.results | rejectattr('failed', 'defined') | list | length == demo_organizations | length
+          - team_results.results | rejectattr('failed', 'defined') | list | length == demo_teams | length
+          - user_results.results | rejectattr('failed', 'defined') | list | length == demo_users | length
+        success_msg: "All declared resources are present."
+
+    - name: What just happened
+      ansible.builtin.debug:
+        msg:
+          - "Organizations : {{ org_results.results | selectattr('changed') | list | length }} changed of {{ demo_organizations | length }}"
+          - "Teams         : {{ team_results.results | selectattr('changed') | list | length }} changed of {{ demo_teams | length }}"
+          - "Users         : {{ user_results.results | selectattr('changed') | list | length }} changed of {{ demo_users | length }}"
+          - ""
+          - "Open the AAP UI now. Then run 02-idempotency-and-drift.yml."

@@ -1,0 +1,19 @@
+# Generated reports — regenerate with playbooks/06-audit-report.yml
+reports/*.md
+
+# Local overrides. Never commit real credentials.
+group_vars/all.local.yml
+.env
+*.vault
+vault-password*
+
+# Ansible noise
+*.retry
+.ansible/
+__pycache__/
+*.pyc
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store

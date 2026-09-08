@@ -1,0 +1,106 @@
+---
+# ═══════════════════════════════════════════════════════════════════════════
+# SCENARIO 05 — Connection modes and why persistent connections matter
+#
+# THE STORY
+#   ansible.platform can reach the Gateway three ways:
+#
+#     local            action plugin on the control node makes the calls
+#     http-direct      ansible.platform.http, a fresh session per task
+#     http-persistent  ansible.platform.http, ONE session reused by every task
+#
+#   For three resources nobody cares. For the 400-resource CaC run a real
+#   customer has, re-authenticating on every task is most of the wall clock.
+#
+#   This play does the same {{ iterations }} round trips in whichever mode you
+#   point it at, and times itself. Run it against each group and compare.
+#
+# Run all three back to back:
+#   ./demo.sh 05
+#
+# Or one at a time:
+#   ansible-playbook playbooks/05-connection-modes.yml -l aap_local
+#   ansible-playbook playbooks/05-connection-modes.yml -l aap_http_direct
+#   ansible-playbook playbooks/05-connection-modes.yml -l aap_http_persistent
+# ═══════════════════════════════════════════════════════════════════════════
+- name: "05 | Connection modes — same work, three transports"
+  hosts: aap_all
+  gather_facts: false
+
+  vars_files:
+    - ../vars/tenant.yml
+
+  vars:
+    iterations: 10
+    probe_org: "{{ demo_prefix }}-ConnProbe"
+    aap: &aap
+      aap_hostname: "{{ aap_gateway.hostname }}"
+      aap_username: "{{ aap_gateway.username }}"
+      aap_password: "{{ aap_gateway.password }}"
+      aap_validate_certs: "{{ aap_gateway.validate_certs }}"
+      aap_request_timeout: "{{ aap_gateway.request_timeout }}"
+
+  tasks:
+    - name: Banner
+      ansible.builtin.include_tasks: ../tasks/banner.yml
+      vars:
+        banner_title: "05 — CONNECTION MODE: {{ inventory_hostname }}"
+        banner_lines:
+          - "ansible_connection : {{ ansible_connection | default('local') }}"
+          - "persistent         : {{ ansible_platform_use_persistent_connection | default(false) }}"
+          - "round trips        : {{ iterations }}"
+
+    - name: Start the clock
+      ansible.builtin.set_fact:
+        t_start: "{{ lookup('pipe', 'date +%s') }}"
+
+    - name: Create the probe organization
+      ansible.platform.organization:
+        name: "{{ probe_org }}-{{ inventory_hostname }}"
+        description: "Connection mode probe"
+        state: present
+        <<: *aap
+
+    # Every one of these is a real API round trip. In direct mode each also
+    # pays for a fresh TLS handshake and a fresh authentication.
+    - name: "Hit the Gateway repeatedly — round trips: {{ iterations }}"
+      ansible.platform.organization:
+        name: "{{ probe_org }}-{{ inventory_hostname }}"
+        description: "Connection mode probe"
+        state: present
+        <<: *aap
+      loop: "{{ range(1, iterations | int + 1) | list }}"
+      loop_control:
+        label: "round trip {{ item }}/{{ iterations }}"
+      register: probe_runs
+
+    - name: Stop the clock
+      ansible.builtin.set_fact:
+        t_end: "{{ lookup('pipe', 'date +%s') }}"
+
+    - name: Timing
+      ansible.builtin.debug:
+        msg:
+          - "Mode         : {{ inventory_hostname }}"
+          - "Round trips  : {{ iterations }}"
+          - "Elapsed      : {{ (t_end | int) - (t_start | int) }}s"
+          - "Idempotent   : {{ probe_runs.results | selectattr('changed') | list | length == 0 }}"
+
+    - name: Every mode must give identical results
+      ansible.builtin.assert:
+        that:
+          - probe_runs.results | selectattr('changed') | list | length == 0
+        success_msg: >-
+          Same declarative behaviour regardless of transport. The connection mode
+          is a performance decision, not a correctness one.
+
+  post_tasks:
+    - name: Remove the probe organization
+      ansible.platform.organization:
+        name: "{{ probe_org }}-{{ inventory_hostname }}"
+        state: absent
+        <<: *aap
+      register: probe_cleanup
+      failed_when:
+        - probe_cleanup.failed | default(false)
+        - "'Not Found' not in (probe_cleanup.msg | default(''))"

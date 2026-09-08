@@ -1,0 +1,126 @@
+---
+# ═══════════════════════════════════════════════════════════════════════════
+# SCENARIO 03 — RBAC as code
+#
+# THE STORY
+#   "Who has access to production?" is a question most platform teams answer by
+#   opening the UI and squinting. Here the answer is a file, and every change to
+#   it has an author, a reviewer and a date.
+#
+#   The playbook also queries the Gateway for the list of *valid* permissions
+#   before it defines a role — so you are not guessing at permission strings,
+#   and neither is the auditor reading your repo.
+#
+# WHAT TO SAY WHILE IT RUNS
+#   "Grants go to teams, not to people. Adding someone to a team is a one-line
+#    diff; granting a person direct access to six objects is how you end up
+#    with an access review nobody can complete."
+#
+# Pre-req: playbooks/01-tenant-onboarding.yml
+# Run:     ansible-playbook playbooks/03-rbac-as-code.yml
+# ═══════════════════════════════════════════════════════════════════════════
+- name: "03 | RBAC as code — roles, and who gets them"
+  hosts: aap_local
+  gather_facts: false
+
+  vars_files:
+    - ../vars/tenant.yml
+    - ../vars/rbac.yml
+
+  vars:
+    aap: &aap
+      aap_hostname: "{{ aap_gateway.hostname }}"
+      aap_username: "{{ aap_gateway.username }}"
+      aap_password: "{{ aap_gateway.password }}"
+      aap_validate_certs: "{{ aap_gateway.validate_certs }}"
+      aap_request_timeout: "{{ aap_gateway.request_timeout }}"
+
+  tasks:
+    - name: Banner
+      ansible.builtin.include_tasks: ../tasks/banner.yml
+      vars:
+        banner_title: "03 — RBAC AS CODE"
+        banner_lines:
+          - "{{ demo_role_definitions | length }} role definitions"
+          - "{{ demo_user_role_assignments | length }} direct user grants"
+          - "{{ demo_team_role_assignments | length }} team grants"
+
+    # ── Discover what permissions actually exist ─────────────────────────────
+    # Useful on stage and useful in real life: the Gateway will tell you the
+    # legal permission strings, so nobody has to grep the docs.
+    - name: Ask the Gateway which permissions exist for an organization
+      ansible.builtin.set_fact:
+        org_permissions: >-
+          {{ lookup('ansible.platform.gateway_api', 'role_metadata',
+                    host=aap_gateway.hostname,
+                    username=aap_gateway.username,
+                    password=aap_gateway.password,
+                    verify_ssl=aap_gateway.validate_certs)
+             | json_query('allowed_permissions."shared.organization"') }}
+      failed_when: false
+
+    - name: Available organization permissions
+      ansible.builtin.debug:
+        msg: "{{ org_permissions | default('role_metadata not exposed on this build - skipping', true) }}"
+
+    # ── Roles ────────────────────────────────────────────────────────────────
+    - name: Ensure custom role definitions exist
+      ansible.platform.role_definition:
+        name: "{{ item.name }}"
+        description: "{{ item.description }}"
+        content_type: "{{ item.content_type }}"
+        permissions: "{{ item.permissions }}"
+        state: present
+        <<: *aap
+      loop: "{{ demo_role_definitions }}"
+      loop_control:
+        label: "{{ item.name }} ({{ item.permissions | join(', ') }})"
+      register: role_results
+
+    # ── Grants to teams (the pattern that scales) ────────────────────────────
+    - name: Grant roles to teams
+      ansible.platform.role_team_assignment:
+        role_definition: "{{ item.role_definition }}"
+        team: "{{ item.team }}"
+        assignment_objects: "{{ item.assignment_objects }}"
+        state: present
+        <<: *aap
+      loop: "{{ demo_team_role_assignments }}"
+      loop_control:
+        label: "{{ item.team }} -> {{ item.role_definition }}"
+      register: team_grants
+
+    # ── Grants to individuals (use sparingly) ────────────────────────────────
+    - name: Grant roles directly to users
+      ansible.platform.role_user_assignment:
+        role_definition: "{{ item.role_definition }}"
+        user: "{{ item.user }}"
+        object_ids: "{{ item.object_ids }}"
+        state: present
+        <<: *aap
+      loop: "{{ demo_user_role_assignments }}"
+      loop_control:
+        label: "{{ item.user }} -> {{ item.role_definition }}"
+      register: user_grants
+
+    # ── Prove a grant is really in place ─────────────────────────────────────
+    # state: exists asks a question instead of making a change. Perfect for the
+    # "prove it to the auditor" step of a pipeline.
+    - name: Verify one team grant with a read-only existence check
+      ansible.platform.role_team_assignment:
+        role_definition: "{{ demo_team_role_assignments[0].role_definition }}"
+        team: "{{ demo_team_role_assignments[0].team }}"
+        assignment_objects: "{{ demo_team_role_assignments[0].assignment_objects }}"
+        state: exists
+        <<: *aap
+      register: grant_check
+
+    - name: Access summary
+      ansible.builtin.debug:
+        msg:
+          - "Roles defined  : {{ role_results.results | length }}"
+          - "Team grants    : {{ team_grants.results | length }}"
+          - "User grants    : {{ user_grants.results | length }}"
+          - "Spot check     : {{ 'grant confirmed present' if grant_check.exists | default(false) else 'NOT FOUND' }}"
+          - ""
+          - "Every line above is reviewable in a pull request and revertable with git revert."

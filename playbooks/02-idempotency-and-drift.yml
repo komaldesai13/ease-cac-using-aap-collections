@@ -1,0 +1,169 @@
+---
+# ═══════════════════════════════════════════════════════════════════════════
+# SCENARIO 02 — Idempotency and drift
+#
+# THE STORY
+#   This is the scenario that wins the argument. Four acts:
+#
+#     Act 1  Re-apply the exact config from scenario 01  -> changed=0
+#     Act 2  Someone "fixes something in the UI"          -> drift introduced
+#     Act 3  Detect it WITHOUT touching anything          -> --check --diff
+#     Act 4  Re-apply                                     -> drift corrected
+#
+#   Act 3 is the one people lean in for. A read-only run that tells you exactly
+#   how far production has slipped from what's in Git is something a runbook
+#   can never give you.
+#
+# WHAT TO SAY WHILE IT RUNS
+#   Act 1: "Same command, zero changes. That's what makes it safe to run this
+#           from CI on every commit."
+#   Act 2: "Now I'm going to be the colleague who fixes something at 2am and
+#           forgets to tell anyone."
+#   Act 3: "Check mode. Nothing is being written. This is a diff between
+#           production and main."
+#
+# Pre-req: playbooks/01-tenant-onboarding.yml
+# Run:     ansible-playbook playbooks/02-idempotency-and-drift.yml
+# ═══════════════════════════════════════════════════════════════════════════
+- name: "02 | Idempotency and drift detection"
+  hosts: aap_local
+  gather_facts: false
+
+  vars_files:
+    - ../vars/tenant.yml
+
+  vars:
+    target_org: "{{ demo_organizations[0] }}"
+    aap: &aap
+      aap_hostname: "{{ aap_gateway.hostname }}"
+      aap_username: "{{ aap_gateway.username }}"
+      aap_password: "{{ aap_gateway.password }}"
+      aap_validate_certs: "{{ aap_gateway.validate_certs }}"
+      aap_request_timeout: "{{ aap_gateway.request_timeout }}"
+
+  tasks:
+    # ── ACT 1 — idempotency ──────────────────────────────────────────────────
+    - name: Banner act 1
+      ansible.builtin.include_tasks: ../tasks/banner.yml
+      vars:
+        banner_title: "ACT 1 — re-apply the same config, expect nothing to change"
+
+    - name: Re-apply the tenant configuration unchanged
+      ansible.platform.organization:
+        name: "{{ item.name }}"
+        description: "{{ item.description }}"
+        state: present
+        <<: *aap
+      loop: "{{ demo_organizations }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: rerun
+
+    - name: Prove the re-run was a no-op
+      ansible.builtin.assert:
+        that:
+          - rerun.results | selectattr('changed') | list | length == 0
+        success_msg: "changed=0. Safe to run on every commit, forever."
+        fail_msg: >-
+          Something reported changed on an unmodified re-run. Either scenario 01
+          was not run first, or a field is not comparing cleanly.
+
+    # ── ACT 2 — introduce drift ──────────────────────────────────────────────
+    - name: Banner act 2
+      ansible.builtin.include_tasks: ../tasks/banner.yml
+      vars:
+        banner_title: "ACT 2 — somebody edits production by hand"
+        banner_lines:
+          - "Changing the description of '{{ target_org.name }}' out of band."
+          - "Pretend this was a UI click at 2am during an incident."
+
+    - name: Introduce drift (stand-in for a manual UI edit)
+      ansible.platform.organization:
+        name: "{{ target_org.name }}"
+        description: "TEMP - changed during incident INC-4471, will tidy up later"
+        state: present
+        <<: *aap
+      register: drift_introduced
+
+    - name: Confirm production no longer matches Git
+      ansible.builtin.assert:
+        that:
+          - drift_introduced is changed
+
+    # ── ACT 3 — detect, without changing anything ────────────────────────────
+    - name: Banner act 3
+      ansible.builtin.include_tasks: ../tasks/banner.yml
+      vars:
+        banner_title: "ACT 3 — detect the drift READ-ONLY (check mode + diff)"
+        banner_lines:
+          - "Nothing below writes to AAP. This is the audit run you schedule nightly."
+
+    - name: Compare declared state against live state
+      ansible.platform.organization:
+        name: "{{ item.name }}"
+        description: "{{ item.description }}"
+        state: present
+        <<: *aap
+      loop: "{{ demo_organizations }}"
+      loop_control:
+        label: "{{ item.name }}"
+      check_mode: true
+      diff: true
+      register: drift_scan
+
+    - name: Build the drift report
+      ansible.builtin.set_fact:
+        drifted: "{{ drift_scan.results | selectattr('changed') | map(attribute='item.name') | list }}"
+
+    - name: Drift report
+      ansible.builtin.debug:
+        msg:
+          - "Resources checked   : {{ drift_scan.results | length }}"
+          - "Resources drifted   : {{ drifted | length }}"
+          - "Drifted             : {{ drifted }}"
+          - ""
+          - "In CI this is the step that fails the nightly compliance job and"
+          - "opens a ticket, without an engineer being paged to go and look."
+
+    - name: The scan found the drift we planted
+      ansible.builtin.assert:
+        that:
+          - target_org.name in drifted
+        fail_msg: "Check mode did not report the drift — that would be a real bug worth filing."
+
+    # ── ACT 4 — correct it ───────────────────────────────────────────────────
+    - name: Banner act 4
+      ansible.builtin.include_tasks: ../tasks/banner.yml
+      vars:
+        banner_title: "ACT 4 — re-apply from Git, drift corrected"
+
+    - name: Restore declared state
+      ansible.platform.organization:
+        name: "{{ item.name }}"
+        description: "{{ item.description }}"
+        state: present
+        <<: *aap
+      loop: "{{ demo_organizations }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: remediation
+
+    - name: Verify we are back in sync
+      ansible.platform.organization:
+        name: "{{ item.name }}"
+        description: "{{ item.description }}"
+        state: present
+        <<: *aap
+      loop: "{{ demo_organizations }}"
+      loop_control:
+        label: "{{ item.name }}"
+      check_mode: true
+      register: post_check
+
+    - name: Result
+      ansible.builtin.assert:
+        that:
+          - remediation.results | selectattr('changed') | list | length == 1
+          - post_check.results | selectattr('changed') | list | length == 0
+        success_msg: >-
+          Drift corrected and re-verified. Git is authoritative again.

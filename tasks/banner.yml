@@ -1,0 +1,7 @@
+---
+# Prints a wide, readable header. Booth screens get watched from three metres
+# away, so scenario boundaries need to be obvious.
+- name: "{{ banner_title }}"
+  ansible.builtin.debug:
+    msg: "{{ ['', '=' * 76, banner_title, '=' * 76] + (banner_lines | default([])) + [''] }}"
+  tags: [always]

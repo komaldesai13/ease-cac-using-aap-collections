@@ -1,0 +1,4 @@
+---
+# Local mode: the module's action plugin runs on the control node and makes the
+# API calls itself. Nothing to configure — this is the default.
+ansible_connection: local

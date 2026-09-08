@@ -1,0 +1,66 @@
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# AUTHENTICATION AS CODE
+#
+# The demo uses the built-in `local` authenticator plugin so that scenario 04
+# runs anywhere, with no LDAP or SAML server in the room. The shape of the
+# configuration is identical for a real IdP — see the commented block at the
+# bottom of this file, which is what a customer actually ships.
+# ─────────────────────────────────────────────────────────────────────────────
+
+demo_authenticator:
+  name: "{{ demo_prefix }}-Demo-Login"
+  slug: "{{ demo_prefix | lower }}-demo-login"
+  type: ansible_base.authentication.authenticator_plugins.local
+  configuration: {}
+  # Left disabled on purpose: creating an authenticator during a live demo
+  # should never be able to affect how anyone logs in to the shared AAP.
+  enabled: false
+  order: 100
+
+# Authenticator maps turn IdP facts into AAP membership. This is the part teams
+# usually maintain in a spreadsheet, and the part that quietly goes stale.
+demo_authenticator_maps:
+  - name: "{{ demo_prefix }}-Map-Engineering-Org"
+    map_type: organization
+    organization: "{{ demo_prefix }}-Engineering"
+    role: "Organization Member"
+    revoke: true
+    order: 1
+    triggers:
+      always: {}
+
+  - name: "{{ demo_prefix }}-Map-SRE-Team"
+    map_type: team
+    organization: "{{ demo_prefix }}-Operations"
+    team: "{{ demo_prefix }}-Platform-SRE"
+    role: "Team Member"
+    revoke: true
+    order: 2
+    triggers:
+      always: {}
+
+# ─── What this looks like against a real IdP ─────────────────────────────────
+#
+# demo_authenticator:
+#   name: Corporate LDAP
+#   slug: corporate-ldap
+#   type: ansible_base.authentication.authenticator_plugins.ldap
+#   enabled: true
+#   configuration:
+#     SERVER_URI: ["ldaps://ldap.example.com:636"]
+#     BIND_DN: "cn=service,ou=svc,dc=example,dc=com"
+#     BIND_PASSWORD: "{{ vault_ldap_bind_password }}"
+#     USER_SEARCH: ["ou=people,dc=example,dc=com", "SCOPE_SUBTREE", "(uid=%(user)s)"]
+#     GROUP_TYPE: "MemberDNGroupType"
+#     GROUP_SEARCH: ["ou=groups,dc=example,dc=com", "SCOPE_SUBTREE", "(objectClass=groupOfNames)"]
+#
+# demo_authenticator_maps:
+#   - name: Platform Admins
+#     map_type: is_superuser
+#     revoke: true          # revoke:true is what makes this *enforcement*, not a one-way sync
+#     order: 0
+#     triggers:
+#       groups:
+#         has_or:
+#           - "cn=aap-admins,ou=groups,dc=example,dc=com"

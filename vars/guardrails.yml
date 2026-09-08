@@ -1,0 +1,19 @@
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# PLATFORM GUARDRAILS
+#
+# Settings and feature flags that a compliance baseline pins. Scenario 07 puts
+# these in place, proves they are enforced, and restores whatever was there
+# before — a shared demo pod should be handed back exactly as it was found.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Safe, reversible, and visible in the UI. Session lifetime is a genuine
+# compliance control (CIS, PCI-DSS 8.2.8) so it makes an honest example.
+demo_settings:
+  SESSION_COOKIE_AGE: 1800
+
+# Feature flags are read-mostly on a stock install; scenario 07 reports on them
+# rather than flipping them, so the demo can't break a shared environment.
+demo_feature_flags_to_report:
+  - FEATURE_INDIRECT_NODE_COUNTING_ENABLED
+  - FEATURE_POLICY_AS_CODE_ENABLED

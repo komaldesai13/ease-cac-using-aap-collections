@@ -1,0 +1,105 @@
+---
+# ═══════════════════════════════════════════════════════════════════════════
+# SCENARIO 04 — Authentication as code
+#
+# THE STORY
+#   Authenticator maps are how an IdP group becomes AAP access. Most teams
+#   maintain that mapping in a spreadsheet, and the spreadsheet is wrong.
+#
+#   Put it in Git and the mapping is enforced on every run: revoke: true means
+#   "if the IdP no longer says you're in this group, you no longer have this
+#   access". That is the difference between a sync and a control.
+#
+# SAFETY
+#   The demo authenticator is the built-in `local` plugin and is created
+#   DISABLED, so running this on a shared AAP cannot change how anyone logs in.
+#   vars/auth.yml contains the real LDAP/SAML shape in a comment block.
+#
+# Pre-req: playbooks/01-tenant-onboarding.yml
+# Run:     ansible-playbook playbooks/04-authentication-as-code.yml
+# ═══════════════════════════════════════════════════════════════════════════
+- name: "04 | Authentication as code — authenticator and its maps"
+  hosts: aap_local
+  gather_facts: false
+
+  vars_files:
+    - ../vars/tenant.yml
+    - ../vars/auth.yml
+
+  vars:
+    aap: &aap
+      aap_hostname: "{{ aap_gateway.hostname }}"
+      aap_username: "{{ aap_gateway.username }}"
+      aap_password: "{{ aap_gateway.password }}"
+      aap_validate_certs: "{{ aap_gateway.validate_certs }}"
+      aap_request_timeout: "{{ aap_gateway.request_timeout }}"
+
+  tasks:
+    - name: Banner
+      ansible.builtin.include_tasks: ../tasks/banner.yml
+      vars:
+        banner_title: "04 — AUTHENTICATION AS CODE"
+        banner_lines:
+          - "Authenticator : {{ demo_authenticator.name }} (created disabled - safe on shared AAP)"
+          - "Maps          : {{ demo_authenticator_maps | length }}"
+
+    - name: Ensure the authenticator exists
+      ansible.platform.authenticator:
+        name: "{{ demo_authenticator.name }}"
+        slug: "{{ demo_authenticator.slug }}"
+        type: "{{ demo_authenticator.type }}"
+        configuration: "{{ demo_authenticator.configuration }}"
+        enabled: "{{ demo_authenticator.enabled }}"
+        order: "{{ demo_authenticator.order }}"
+        state: present
+        <<: *aap
+      register: authenticator_result
+
+    # Maps are ordered. Order matters: the first matching map wins for a given
+    # map_type, which is exactly the kind of detail that gets lost when this
+    # lives in someone's head.
+    - name: Ensure authenticator maps exist
+      ansible.platform.authenticator_map:
+        name: "{{ item.name }}"
+        authenticator: "{{ demo_authenticator.name }}"
+        map_type: "{{ item.map_type }}"
+        organization: "{{ item.organization | default(omit) }}"
+        team: "{{ item.team | default(omit) }}"
+        role: "{{ item.role | default(omit) }}"
+        revoke: "{{ item.revoke }}"
+        order: "{{ item.order }}"
+        triggers: "{{ item.triggers }}"
+        state: present
+        <<: *aap
+      loop: "{{ demo_authenticator_maps }}"
+      loop_control:
+        label: "[{{ item.order }}] {{ item.name }} ({{ item.map_type }})"
+      register: map_results
+
+    - name: Re-apply to show the whole auth config is idempotent
+      ansible.platform.authenticator:
+        name: "{{ demo_authenticator.name }}"
+        slug: "{{ demo_authenticator.slug }}"
+        type: "{{ demo_authenticator.type }}"
+        configuration: "{{ demo_authenticator.configuration }}"
+        enabled: "{{ demo_authenticator.enabled }}"
+        order: "{{ demo_authenticator.order }}"
+        state: present
+        <<: *aap
+      register: authenticator_rerun
+
+    - name: Result
+      ansible.builtin.debug:
+        msg:
+          - "Authenticator created/updated : {{ authenticator_result.changed }}"
+          - "Second run changed            : {{ authenticator_rerun.changed }} (expected: false)"
+          - "Maps applied                  : {{ map_results.results | length }}"
+          - ""
+          - "revoke: true on every map means access is *enforced* from the IdP,"
+          - "not merely granted once and forgotten."
+
+    - name: Confirm idempotency
+      ansible.builtin.assert:
+        that:
+          - authenticator_rerun is not changed
+        fail_msg: "Authenticator re-run reported changed — worth investigating before you demo it."

@@ -1,0 +1,11 @@
+---
+# HTTP-direct mode: the ansible.platform.http connection plugin handles
+# transport, and each task opens its own session to the Gateway.
+ansible_connection: ansible.platform.http
+ansible_platform_use_persistent_connection: false
+
+ansible_host: "{{ aap_gateway_host }}"
+ansible_user: "{{ aap_gateway.username }}"
+ansible_password: "{{ aap_gateway.password }}"
+ansible_httpapi_use_ssl: "{{ aap_gateway_use_ssl }}"
+ansible_httpapi_validate_certs: "{{ aap_gateway.validate_certs }}"

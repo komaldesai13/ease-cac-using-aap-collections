@@ -1,0 +1,71 @@
+---
+# ═══════════════════════════════════════════════════════════════════════════
+# SCENARIO 00 — Preflight
+#
+# Run this once before the booth opens, and again any time the Wi-Fi looks
+# suspicious. It proves three things and changes nothing:
+#   1. the ansible.platform collection is installed and importable
+#   2. the Gateway is reachable and the credentials work
+#   3. the demo prefix is not already in use on this AAP
+#
+# Run: ansible-playbook playbooks/00-preflight.yml
+# ═══════════════════════════════════════════════════════════════════════════
+- name: "00 | Preflight — is this environment ready to demo?"
+  hosts: aap_local
+  gather_facts: false
+
+  vars_files:
+    - ../vars/tenant.yml
+
+  tasks:
+    - name: Banner
+      ansible.builtin.include_tasks: ../tasks/banner.yml
+      vars:
+        banner_title: "PREFLIGHT — checking the demo environment"
+        banner_lines:
+          - "Gateway : {{ aap_gateway.hostname }}"
+          - "User    : {{ aap_gateway.username }}"
+          - "Prefix  : {{ demo_prefix }}"
+
+    - name: Fail early if no password was supplied
+      ansible.builtin.assert:
+        that:
+          - aap_gateway.password | length > 0
+        fail_msg: >-
+          No Gateway password. Run:  export AAP_PASSWORD='...'
+          (or set aap_gateway.password in group_vars/all.yml)
+
+    - name: Check the ansible.platform collection is installed
+      ansible.builtin.command: ansible-galaxy collection list ansible.platform
+      register: collection_list
+      changed_when: false
+      failed_when: "'ansible.platform' not in collection_list.stdout"
+
+    - name: Report the installed collection version
+      ansible.builtin.debug:
+        msg: "{{ collection_list.stdout_lines | select('search', 'ansible.platform') | list }}"
+
+    # A read-only call is the cheapest possible proof that auth works.
+    - name: Reach the Gateway and count organizations
+      ansible.builtin.set_fact:
+        all_orgs: >-
+          {{ query('ansible.platform.gateway_api', 'organizations',
+                   host=aap_gateway.hostname,
+                   username=aap_gateway.username,
+                   password=aap_gateway.password,
+                   verify_ssl=aap_gateway.validate_certs) }}
+
+    - name: Look for leftovers from a previous demo run
+      ansible.builtin.set_fact:
+        leftover_orgs: "{{ all_orgs | selectattr('name', 'search', '^' ~ demo_prefix ~ '-') | map(attribute='name') | list }}"
+
+    - name: Preflight result
+      ansible.builtin.debug:
+        msg:
+          - "Gateway reachable            : YES"
+          - "Organizations visible        : {{ all_orgs | length }}"
+          - "Leftovers with prefix '{{ demo_prefix }}' : {{ leftover_orgs | default([], true) | length }} {{ leftover_orgs | default([], true) }}"
+          - ""
+          - "{{ 'READY — run playbooks/01-tenant-onboarding.yml'
+                if leftover_orgs | length == 0
+                else 'STALE STATE — run teardown.yml first, then re-run preflight' }}"

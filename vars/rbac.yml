@@ -1,0 +1,45 @@
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# RBAC AS CODE
+#
+# Who can do what, reviewable in a pull request. The interesting property is not
+# that you *can* write permissions in YAML — it is that a permission change now
+# has an author, a date, a reviewer and a revert button.
+# ─────────────────────────────────────────────────────────────────────────────
+
+demo_role_definitions:
+  - name: "{{ demo_prefix }}-Org-Viewer"
+    description: "Read-only access to an organization and its teams"
+    content_type: shared.organization
+    permissions:
+      - shared.view_organization
+      - shared.view_team
+
+  - name: "{{ demo_prefix }}-Team-Viewer"
+    description: "Read-only access to a single team"
+    content_type: shared.team
+    permissions:
+      - shared.view_team
+
+# Direct user grants. Prefer team grants (below) in production — they scale.
+demo_user_role_assignments:
+  - role_definition: "{{ demo_prefix }}-Org-Viewer"
+    user: "{{ demo_prefix | lower }}-carol"
+    object_ids:
+      - "{{ demo_prefix }}-Engineering"
+      - "{{ demo_prefix }}-Operations"
+
+# Team grants. Add a person to a team, they inherit the team's access — this is
+# the pattern that stops permission sprawl.
+demo_team_role_assignments:
+  - role_definition: "{{ demo_prefix }}-Org-Viewer"
+    team: "{{ demo_prefix }}-App-Developers"
+    assignment_objects:
+      - name: "{{ demo_prefix }}-Engineering"
+        type: organizations
+
+  - role_definition: "{{ demo_prefix }}-Org-Viewer"
+    team: "{{ demo_prefix }}-Platform-SRE"
+    assignment_objects:
+      - name: "{{ demo_prefix }}-Operations"
+        type: organizations

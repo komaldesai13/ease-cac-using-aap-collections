@@ -1,0 +1,99 @@
+---
+# ═══════════════════════════════════════════════════════════════════════════
+# SCENARIO 09 — Disaster recovery: rebuild the platform from Git, on a timer
+#
+# THE STORY
+#   The closing act. Everything scenarios 01-04 built gets deleted live, in
+#   front of the audience, and then rebuilt from the repository while a clock
+#   runs. The number at the end is the honest answer to "how long would it take
+#   you to stand this up again?"
+#
+#   The point is not the number. The point is that the answer is knowable at
+#   all, and that you can rehearse it on a Tuesday afternoon instead of finding
+#   out during an incident.
+#
+# WHAT TO SAY BEFORE YOU HIT ENTER
+#   "I'm about to delete everything we just built. Watch the clock."
+#
+# Run: ansible-playbook playbooks/09-rebuild-from-git.yml
+# ═══════════════════════════════════════════════════════════════════════════
+- name: "09 | Rebuild from Git — start the clock"
+  hosts: aap_local
+  gather_facts: false
+  tasks:
+    - name: Banner
+      ansible.builtin.include_tasks: ../tasks/banner.yml
+      vars:
+        banner_title: "09 — DISASTER RECOVERY DRILL"
+        banner_lines:
+          - "About to destroy and rebuild the entire configuration."
+          - "Git is the only copy of this platform's definition. That is the point."
+
+    # set_fact writes a host fact, and host facts survive into the plays imported
+    # below — which is how one playbook can time several others.
+    - name: Start the clock
+      ansible.builtin.set_fact:
+        dr_start: "{{ lookup('pipe', 'date +%s') }}"
+
+- name: Destroy
+  ansible.builtin.import_playbook: ../teardown.yml
+
+- name: Rebuild — tenant
+  ansible.builtin.import_playbook: 01-tenant-onboarding.yml
+
+- name: Rebuild — RBAC
+  ansible.builtin.import_playbook: 03-rbac-as-code.yml
+
+- name: Rebuild — authentication
+  ansible.builtin.import_playbook: 04-authentication-as-code.yml
+
+- name: "09 | Rebuild from Git — stop the clock"
+  hosts: aap_local
+  gather_facts: false
+
+  vars_files:
+    - ../vars/tenant.yml
+
+  vars:
+    aap: &aap
+      aap_hostname: "{{ aap_gateway.hostname }}"
+      aap_username: "{{ aap_gateway.username }}"
+      aap_password: "{{ aap_gateway.password }}"
+      aap_validate_certs: "{{ aap_gateway.validate_certs }}"
+      aap_request_timeout: "{{ aap_gateway.request_timeout }}"
+
+  tasks:
+    - name: Stop the clock
+      ansible.builtin.set_fact:
+        dr_end: "{{ lookup('pipe', 'date +%s') }}"
+
+    # Rebuilt is not the same as correct. Verify with a read-only pass before
+    # claiming success — this is the step people skip in real DR plans.
+    - name: Verify the rebuild matches the declared state (read-only)
+      ansible.platform.organization:
+        name: "{{ item.name }}"
+        description: "{{ item.description }}"
+        state: present
+        <<: *aap
+      loop: "{{ demo_organizations }}"
+      loop_control:
+        label: "{{ item.name }}"
+      check_mode: true
+      register: verify
+
+    - name: Recovery time
+      ansible.builtin.debug:
+        msg:
+          - "=========================================================================="
+          - "  Platform destroyed and rebuilt in {{ (dr_end | int) - (dr_start | int) }} seconds"
+          - "  Verified against declared state: {{ 'MATCH' if verify.results | selectattr('changed') | list | length == 0 else 'MISMATCH' }}"
+          - "=========================================================================="
+          - ""
+          - "No runbook. No screenshots. No one who 'knows how it was set up'."
+          - "Just the repository."
+
+    - name: Rebuild must be exact
+      ansible.builtin.assert:
+        that:
+          - verify.results | selectattr('changed') | list | length == 0
+        fail_msg: "Rebuilt platform does not match the declared state."

@@ -1,0 +1,12 @@
+---
+# ansible-galaxy collection install -r requirements.yml
+collections:
+  # ansible.platform 2.7 is not published to Galaxy yet, so it comes from the
+  # branch. Swap this for a plain version once it ships.
+  - name: https://github.com/ansible/ansible.platform.git
+    type: git
+    version: stable-2.7
+
+  # Provides the profile_tasks callback used by ansible.cfg for per-task timing,
+  # which scenario 05 relies on.
+  - name: ansible.posix

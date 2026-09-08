@@ -1,0 +1,166 @@
+---
+# ═══════════════════════════════════════════════════════════════════════════
+# teardown.yml — remove everything this repo created
+#
+# Run it between demos, run it if a scenario dies halfway, run it before you
+# hand the pod back. It is safe to run when nothing exists.
+#
+# Order matters: assignments before roles, teams and users before their
+# organizations. State: absent is idempotent, so a second run is a clean no-op.
+#
+# Run: ansible-playbook teardown.yml
+# ═══════════════════════════════════════════════════════════════════════════
+- name: "Teardown — remove every resource created by this repo"
+  hosts: aap_local
+  gather_facts: false
+
+  vars_files:
+    - vars/tenant.yml
+    - vars/rbac.yml
+    - vars/auth.yml
+
+  vars:
+    aap: &aap
+      aap_hostname: "{{ aap_gateway.hostname }}"
+      aap_username: "{{ aap_gateway.username }}"
+      aap_password: "{{ aap_gateway.password }}"
+      aap_validate_certs: "{{ aap_gateway.validate_certs }}"
+      aap_request_timeout: "{{ aap_gateway.request_timeout }}"
+
+  tasks:
+    - name: Banner
+      ansible.builtin.include_tasks: tasks/banner.yml
+      vars:
+        banner_title: "TEARDOWN — removing everything with prefix '{{ demo_prefix }}'"
+
+    - name: Remove authenticator maps
+      ansible.platform.authenticator_map:
+        name: "{{ item.name }}"
+        authenticator: "{{ demo_authenticator.name }}"
+        map_type: "{{ item.map_type }}"
+        state: absent
+        <<: *aap
+      loop: "{{ demo_authenticator_maps }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: _rm
+      failed_when:
+        - _rm.failed | default(false)
+        - "'Not Found' not in (_rm.msg | default(''))"
+
+    - name: Remove the authenticator
+      ansible.platform.authenticator:
+        name: "{{ demo_authenticator.name }}"
+        slug: "{{ demo_authenticator.slug }}"
+        type: "{{ demo_authenticator.type }}"
+        configuration: "{{ demo_authenticator.configuration }}"
+        state: absent
+        <<: *aap
+      register: _rm
+      failed_when:
+        - _rm.failed | default(false)
+        - "'Not Found' not in (_rm.msg | default(''))"
+
+    - name: Remove team role assignments
+      ansible.platform.role_team_assignment:
+        role_definition: "{{ item.role_definition }}"
+        team: "{{ item.team }}"
+        assignment_objects: "{{ item.assignment_objects }}"
+        state: absent
+        <<: *aap
+      loop: "{{ demo_team_role_assignments }}"
+      loop_control:
+        label: "{{ item.team }} -> {{ item.role_definition }}"
+      register: _rm
+      failed_when:
+        - _rm.failed | default(false)
+        - "'Not Found' not in (_rm.msg | default(''))"
+
+    - name: Remove user role assignments
+      ansible.platform.role_user_assignment:
+        role_definition: "{{ item.role_definition }}"
+        user: "{{ item.user }}"
+        object_ids: "{{ item.object_ids }}"
+        state: absent
+        <<: *aap
+      loop: "{{ demo_user_role_assignments }}"
+      loop_control:
+        label: "{{ item.user }} -> {{ item.role_definition }}"
+      register: _rm
+      failed_when:
+        - _rm.failed | default(false)
+        - "'Not Found' not in (_rm.msg | default(''))"
+
+    - name: Remove role definitions
+      ansible.platform.role_definition:
+        name: "{{ item.name }}"
+        content_type: "{{ item.content_type }}"
+        permissions: "{{ item.permissions }}"
+        state: absent
+        <<: *aap
+      loop: "{{ demo_role_definitions }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: _rm
+      failed_when:
+        - _rm.failed | default(false)
+        - "'Not Found' not in (_rm.msg | default(''))"
+
+    - name: Remove users
+      ansible.platform.user:
+        username: "{{ item.username }}"
+        state: absent
+        <<: *aap
+      loop: "{{ demo_users }}"
+      loop_control:
+        label: "{{ item.username }}"
+      register: _rm
+      failed_when:
+        - _rm.failed | default(false)
+        - "'Not Found' not in (_rm.msg | default(''))"
+
+    - name: Remove teams
+      ansible.platform.team:
+        name: "{{ item.name }}"
+        organization: "{{ item.organization }}"
+        state: absent
+        <<: *aap
+      loop: "{{ demo_teams }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: _rm
+      failed_when:
+        - _rm.failed | default(false)
+        - "'Not Found' not in (_rm.msg | default(''))"
+
+    - name: Remove organizations
+      ansible.platform.organization:
+        name: "{{ item.name }}"
+        state: absent
+        <<: *aap
+      loop: "{{ demo_organizations }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: _rm
+      failed_when:
+        - _rm.failed | default(false)
+        - "'Not Found' not in (_rm.msg | default(''))"
+
+    - name: Remove any stray connection probe organizations
+      ansible.platform.organization:
+        name: "{{ demo_prefix }}-ConnProbe-{{ item }}"
+        state: absent
+        <<: *aap
+      loop:
+        - aap-local
+        - aap-direct
+        - aap-persistent
+      register: _rm
+      failed_when:
+        - _rm.failed | default(false)
+        - "'Not Found' not in (_rm.msg | default(''))"
+
+    - name: Done
+      ansible.builtin.debug:
+        msg:
+          - "Teardown complete. Re-run playbooks/00-preflight.yml to confirm a clean slate."

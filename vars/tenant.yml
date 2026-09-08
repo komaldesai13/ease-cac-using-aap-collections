@@ -1,0 +1,56 @@
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# THE SOURCE OF TRUTH
+#
+# This file is the whole point of the demo. It is not a script — it is a
+# *description* of what the platform should look like. Add a user here, open a
+# pull request, merge it, and the platform matches. Delete a line and it is gone
+# on the next run.
+#
+# Nobody has to remember which buttons to click, and nobody can click a button
+# that isn't written down here.
+# ─────────────────────────────────────────────────────────────────────────────
+
+demo_organizations:
+  - name: "{{ demo_prefix }}-Engineering"
+    description: "Product engineering — owns application automation"
+  - name: "{{ demo_prefix }}-Operations"
+    description: "Platform operations — owns infrastructure automation"
+
+demo_teams:
+  - name: "{{ demo_prefix }}-App-Developers"
+    organization: "{{ demo_prefix }}-Engineering"
+    description: "Writes and runs application deployment automation"
+  - name: "{{ demo_prefix }}-Platform-SRE"
+    organization: "{{ demo_prefix }}-Operations"
+    description: "Owns the platform itself — on-call for AAP"
+
+demo_users:
+  - username: "{{ demo_prefix | lower }}-alice"
+    email: "alice@{{ demo_prefix | lower }}.example.com"
+    first_name: Alice
+    last_name: Nakamura
+    organizations:
+      - "{{ demo_prefix }}-Engineering"
+
+  - username: "{{ demo_prefix | lower }}-bob"
+    email: "bob@{{ demo_prefix | lower }}.example.com"
+    first_name: Bob
+    last_name: Okonkwo
+    organizations:
+      - "{{ demo_prefix }}-Operations"
+
+  # An auditor: read-only across the whole platform. Exactly the kind of account
+  # that gets over-provisioned when it is created by hand in a hurry.
+  - username: "{{ demo_prefix | lower }}-carol"
+    email: "carol@{{ demo_prefix | lower }}.example.com"
+    first_name: Carol
+    last_name: Ferreira
+    is_platform_auditor: true
+    organizations:
+      - "{{ demo_prefix }}-Engineering"
+      - "{{ demo_prefix }}-Operations"
+
+# Note what is NOT in this file: passwords. The users above sign in through the
+# authenticator declared in vars/auth.yml, so this file is safe to commit,
+# review in a pull request, and paste on a conference slide.

@@ -1,0 +1,118 @@
+---
+# ═══════════════════════════════════════════════════════════════════════════
+# SCENARIO 08 — Short-lived tokens instead of long-lived passwords
+#
+# THE STORY
+#   A CI pipeline that runs CaC needs credentials. The lazy answer is to give it
+#   the admin password and never rotate it.
+#
+#   The better answer: mint a scoped token at the start of the pipeline, use it
+#   for the run, and revoke it at the end. The credential exists for the life of
+#   one job. If a build log leaks, the token in it is already dead.
+#
+#   The token module publishes the new token to ansible_facts.aap_token, so
+#   downstream tasks pick it up with no copy-paste.
+#
+# This playbook creates and revokes its own tokens. Nothing is left behind.
+#
+# Run: ansible-playbook playbooks/08-token-lifecycle.yml
+# ═══════════════════════════════════════════════════════════════════════════
+- name: "08 | Token lifecycle — credentials that expire on purpose"
+  hosts: aap_local
+  gather_facts: false
+
+  vars:
+    aap: &aap
+      aap_hostname: "{{ aap_gateway.hostname }}"
+      aap_username: "{{ aap_gateway.username }}"
+      aap_password: "{{ aap_gateway.password }}"
+      aap_validate_certs: "{{ aap_gateway.validate_certs }}"
+      aap_request_timeout: "{{ aap_gateway.request_timeout }}"
+
+  tasks:
+    - name: Banner
+      ansible.builtin.include_tasks: ../tasks/banner.yml
+      vars:
+        banner_title: "08 — TOKEN LIFECYCLE"
+        banner_lines:
+          - "Mint a scoped token -> use it -> revoke it, all in one run."
+
+    - name: Token block
+      block:
+        # ── Read-only token ──────────────────────────────────────────────────
+        # scope: read is the right credential for a nightly drift-detection or
+        # audit job. It literally cannot change anything.
+        - name: Mint a read-only token for the audit job
+          ansible.platform.token:
+            description: "{{ demo_prefix }} audit job — read only"
+            scope: read
+            state: present
+            <<: *aap
+          register: read_token
+
+        - name: The token is published as a fact for later tasks
+          ansible.builtin.assert:
+            that:
+              - read_token is changed
+              - read_token.id is defined
+              - ansible_facts.aap_token is defined
+              - ansible_facts.aap_token.token | length > 0
+            success_msg: "Token minted and exposed at ansible_facts.aap_token — no copy-paste needed."
+
+        # ── Use the token instead of the password ────────────────────────────
+        # Note what is missing from this task: aap_password. From here on the
+        # play authenticates with the token it just created.
+        - name: Call the Gateway using the token, not the password
+          ansible.platform.organization:
+            name: Default
+            state: exists
+            aap_hostname: "{{ aap_gateway.hostname }}"
+            aap_token: "{{ ansible_facts.aap_token.token }}"
+            aap_validate_certs: "{{ aap_gateway.validate_certs }}"
+          register: token_auth_check
+
+        - name: Token authentication worked
+          ansible.builtin.assert:
+            that:
+              - token_auth_check.exists | default(false)
+            success_msg: "Authenticated with a token that did not exist sixty seconds ago."
+
+        # ── Write-scoped token ───────────────────────────────────────────────
+        - name: Mint a write-scoped token for the apply job
+          ansible.platform.token:
+            description: "{{ demo_prefix }} apply job — read+write"
+            scope:
+              - read
+              - write
+            state: present
+            <<: *aap
+          register: write_token
+
+        - name: Two tokens now exist, with different blast radii
+          ansible.builtin.debug:
+            msg:
+              - "Read token  id={{ read_token.id }}  scope=read   -> can audit, cannot change"
+              - "Write token id={{ write_token.id }}  scope=read+write -> can apply config"
+              - ""
+              - "Give the nightly drift job the first one and the deploy job the second."
+
+      always:
+        # ── Revoke ───────────────────────────────────────────────────────────
+        # The whole point. A token you forget to revoke is just a password with
+        # extra steps.
+        - name: Revoke every token this run created
+          ansible.platform.token:
+            existing_token_id: "{{ item }}"
+            state: absent
+            <<: *aap
+          loop: >-
+            {{ ([read_token.id] if read_token.id is defined else [])
+             + ([write_token.id] if write_token.id is defined else []) }}
+          register: revoked
+          failed_when:
+            - revoked.failed | default(false)
+            - "'Not Found' not in (revoked.msg | default(''))"
+
+        - name: Confirm cleanup
+          ansible.builtin.debug:
+            msg: "Tokens revoked. Nothing long-lived was left behind."

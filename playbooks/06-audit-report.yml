@@ -1,0 +1,99 @@
+---
+# ═══════════════════════════════════════════════════════════════════════════
+# SCENARIO 06 — Read the platform back out, and hand it to the auditor
+#
+# THE STORY
+#   CaC is not only about writing. The gateway_api lookup reads any Gateway API
+#   endpoint into a variable, which means the current state of the platform is
+#   just data you can template.
+#
+#   This produces a dated Markdown report of who exists, which teams they are
+#   in and what access has been granted. Commit it, attach it to the audit
+#   ticket, or diff last month's against this month's.
+#
+# Nothing in this playbook writes to AAP. It is safe to run at any time.
+#
+# Run: ansible-playbook playbooks/06-audit-report.yml
+# ═══════════════════════════════════════════════════════════════════════════
+- name: "06 | Audit report — export live platform state to Markdown"
+  hosts: aap_local
+  gather_facts: true
+
+  vars_files:
+    - ../vars/tenant.yml
+
+  vars:
+    repo_root: "{{ playbook_dir | dirname }}"
+    report_dir: "{{ repo_root }}/reports"
+    report_file: "{{ report_dir }}/aap-state-{{ ansible_date_time.date }}.md"
+
+  tasks:
+    - name: Banner
+      ansible.builtin.include_tasks: ../tasks/banner.yml
+      vars:
+        banner_title: "06 — AUDIT REPORT (read-only)"
+        banner_lines:
+          - "Reading live state through the ansible.platform.gateway_api lookup"
+
+    # query() returns a list. lookup() would return one joined string, which is
+    # almost never what you want against a collection endpoint.
+    - name: Read organizations, teams, users and roles from the Gateway
+      ansible.builtin.set_fact:
+        live_organizations: >-
+          {{ query('ansible.platform.gateway_api', 'organizations',
+                   host=aap_gateway.hostname, username=aap_gateway.username,
+                   password=aap_gateway.password, verify_ssl=aap_gateway.validate_certs) }}
+        live_teams: >-
+          {{ query('ansible.platform.gateway_api', 'teams',
+                   host=aap_gateway.hostname, username=aap_gateway.username,
+                   password=aap_gateway.password, verify_ssl=aap_gateway.validate_certs) }}
+        live_users: >-
+          {{ query('ansible.platform.gateway_api', 'users',
+                   host=aap_gateway.hostname, username=aap_gateway.username,
+                   password=aap_gateway.password, verify_ssl=aap_gateway.validate_certs) }}
+        live_roles: >-
+          {{ query('ansible.platform.gateway_api', 'role_definitions',
+                   host=aap_gateway.hostname, username=aap_gateway.username,
+                   password=aap_gateway.password, verify_ssl=aap_gateway.validate_certs) }}
+
+    # Server-side filtering with query_params. Pull back the rows you need, not
+    # the whole table — this is the difference between a report that runs in two
+    # seconds and one that times out against a real installation.
+    - name: Read superusers only (filtered by the Gateway, not by us)
+      ansible.builtin.set_fact:
+        live_superusers: >-
+          {{ query('ansible.platform.gateway_api', 'users',
+                   query_params={'is_superuser': true},
+                   host=aap_gateway.hostname, username=aap_gateway.username,
+                   password=aap_gateway.password, verify_ssl=aap_gateway.validate_certs) }}
+
+    - name: Narrow everything down to this demo's resources
+      ansible.builtin.set_fact:
+        demo_orgs_live: "{{ live_organizations | selectattr('name', 'search', '^' ~ demo_prefix ~ '-') | list }}"
+        demo_teams_live: "{{ live_teams | selectattr('name', 'search', '^' ~ demo_prefix ~ '-') | list }}"
+        demo_users_live: "{{ live_users | selectattr('username', 'search', '^' ~ demo_prefix | lower ~ '-') | list }}"
+        demo_roles_live: "{{ live_roles | selectattr('name', 'search', '^' ~ demo_prefix ~ '-') | list }}"
+
+    - name: Ensure the report directory exists
+      ansible.builtin.file:
+        path: "{{ report_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Render the report
+      ansible.builtin.template:
+        src: "{{ repo_root }}/templates/audit-report.md.j2"
+        dest: "{{ report_file }}"
+        mode: "0644"
+
+    - name: Show it on screen
+      ansible.builtin.debug:
+        msg: "{{ lookup('file', report_file).splitlines() }}"
+
+    - name: Where it went
+      ansible.builtin.debug:
+        msg:
+          - "Report written to: {{ report_file }}"
+          - ""
+          - "Commit this next to the config that produced it and the auditor can"
+          - "see both what you intended and what was actually running."
