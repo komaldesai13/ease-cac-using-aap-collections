@@ -1,0 +1,8 @@
+# pip install -r requirements.txt
+#
+# ansible.platform ships its own requirements.txt asking for `requests`, but
+# ansible-galaxy does not install it for you — the collection's platform
+# manager process imports it at runtime and the gateway_api lookup dies with
+# ModuleNotFoundError if it is missing. Install it into the same interpreter
+# that runs ansible-playbook.
+requests

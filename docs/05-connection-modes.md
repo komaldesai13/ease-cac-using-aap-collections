@@ -17,7 +17,7 @@ clock.
 | **http-direct** | `aap_http_direct` | The `ansible.platform.http` connection plugin handles transport. Each task opens a fresh session. |
 | **http-persistent** | `aap_http_persistent` | Same plugin, but one manager process authenticates once and every task in the play reuses that session. |
 
-The wiring for each lives in [`group_vars/`](../group_vars/) — one short file per
+The wiring for each lives in [`inventory/group_vars/`](../inventory/group_vars/) — one short file per
 group, which is the whole configuration burden.
 
 ## Run it

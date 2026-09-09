@@ -1,5 +1,9 @@
 ---
 # ansible-galaxy collection install -r requirements.yml
+#
+# Then also:  pip install -r requirements.txt
+# ansible-galaxy does not install a collection's Python packages, and
+# ansible.platform needs `requests` at runtime.
 collections:
   # ansible.platform 2.7 is not published to Galaxy yet, so it comes from the
   # branch. Swap this for a plain version once it ships.

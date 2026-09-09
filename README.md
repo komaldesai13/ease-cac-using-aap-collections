@@ -39,6 +39,7 @@ repository while someone watches a clock.
 | 08 | [Token lifecycle](docs/08-token-lifecycle.md) | 15s | Credentials that expire on purpose. |
 | 09 | [Rebuild from Git](docs/09-rebuild-from-git.md) | 1–2m | Destroy and rebuild, on a clock. **The closer.** |
 |  | [site.yml and teardown.yml](docs/site-and-teardown.md) |  | Everything at once, and how to clean up. |
+|  | [Setup and troubleshooting](docs/setup-and-troubleshooting.md) |  | Every install step, why it exists, and symptom → fix. |
 
 Also: **[WHY-CAC.md](WHY-CAC.md)** — the case to make between demos, and
 answers to the questions people actually ask.
@@ -49,20 +50,60 @@ answers to the questions people actually ask.
 
 ### Install
 
-`ansible.platform` 2.7 is not on Galaxy yet, so install it from the branch:
+Three things, in order. Do all three in the **same virtualenv you will run the
+demo from** — a collection or a package installed under a different `ansible`
+will not be found. If any of this goes sideways, every failure mode is written
+up in [Setup and troubleshooting](docs/setup-and-troubleshooting.md).
+
+**1. ansible-core 2.16 or newer, in its own venv.** `ansible.platform` declares
+`requires_ansible: ">=2.16.0"`. On anything older, `ansible-galaxy` installs it
+anyway and only warns — then the modules misbehave later, in front of an
+audience. ansible-core 2.16 needs Python 3.10+ on the control node, so a stock
+macOS Python 3.9 will not do:
 
 ```bash
-ansible-galaxy collection install \
-  git+https://github.com/ansible/ansible.platform.git,stable-2.7 --force
-
-ansible-galaxy collection install ansible.posix   # for the timing callback
+python3 -m venv .venv                # any Python 3.10+; 3.14 is fine
+source .venv/bin/activate
+pip install 'ansible-core>=2.16'
 ```
 
-Verify:
+`.venv/` is gitignored. Activate it in every shell you run the demo from —
+`./demo.sh` uses whatever `ansible-playbook` is on your PATH.
+
+**2. The collections** — [`requirements.yml`](requirements.yml) pins both:
 
 ```bash
-ansible-galaxy collection list ansible.platform
+ansible-galaxy collection install -r requirements.yml
 ```
+
+| Collection | From | Why |
+|---|---|---|
+| `ansible.platform` | `stable-2.7` branch on GitHub | every module in these playbooks. 2.7 is not on Galaxy yet, so it comes from git — you need `git` on your PATH and network access to github.com. |
+| `ansible.posix` | Galaxy | the `profile_tasks` callback `ansible.cfg` enables for per-task timing, which scenario 05 reads out loud. |
+
+**3. The Python dependency** — [`requirements.txt`](requirements.txt):
+
+```bash
+pip install -r requirements.txt
+```
+
+This is the one that catches people out. `ansible-galaxy` does **not** install a
+collection's Python packages, and `ansible.platform` imports `requests` inside
+its platform-manager process. Skip this and preflight gets all the way to
+*"Reach the Gateway"* before dying with `ModuleNotFoundError: No module named
+'requests'` buried in a multiprocessing traceback.
+
+**Verify** before you go any further:
+
+```bash
+ansible --version | head -1                          # 2.16 or newer
+ansible-galaxy collection list ansible.platform      # must list a 2.7.x
+python3 -c 'import requests; print(requests.__version__)'
+```
+
+If the collection line prints nothing, the install did not take — re-run it with
+`--force`. `./demo.sh check` verifies all three of these before it touches the
+Gateway, so when in doubt just run that.
 
 ### Point it at your AAP
 
@@ -75,7 +116,7 @@ export DEMO_PREFIX=TechGenie        # namespaces every resource this repo create
 ```
 
 Nothing else needs editing. If you prefer YAML to environment variables, the
-same values live in [`group_vars/all.yml`](group_vars/all.yml).
+same values live in [`inventory/group_vars/all.yml`](inventory/group_vars/all.yml).
 
 ### Check it works
 
@@ -125,8 +166,8 @@ vars/                    ← THE SOURCE OF TRUTH. Open these on screen first.
 
 playbooks/               ← one scenario per file, heavily commented
 docs/                    ← one page per scenario: how to run it, what to say
-group_vars/              ← Gateway connection, and the three connection modes
 inventory/demo.ini       ← one host per connection mode (all localhost)
+inventory/group_vars/    ← Gateway connection, and the three connection modes
 templates/               ← the audit report
 reports/                 ← generated output (gitignored)
 

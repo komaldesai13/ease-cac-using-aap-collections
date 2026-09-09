@@ -10,11 +10,19 @@ suspicious. It is the only scenario that is not for the audience.
 ## What it checks
 
 1. A Gateway password is actually set (the most common cause of a dead demo).
-2. `ansible.platform` is installed, and prints the version it found.
-3. The Gateway is reachable and the credentials work — proven with a read-only
+2. ansible-core is ≥ 2.16, which `ansible.platform` requires. Galaxy only warns
+   about this at install time; here it is a hard stop.
+3. `ansible.platform` is installed, and prints the version it found.
+4. `requests` is importable by the interpreter running the playbook —
+   `ansible-galaxy` does not install a collection's Python dependencies.
+5. The Gateway is reachable and the credentials work — proven with a read-only
    `gateway_api` lookup, not a guess.
-4. No leftovers from a previous run are sitting on the Gateway under your
+6. No leftovers from a previous run are sitting on the Gateway under your
    `DEMO_PREFIX`.
+
+Checks 2–4 are environment checks: they run before anything touches the network,
+so a broken laptop fails in a second with a message that says what to install.
+[Setup and troubleshooting](setup-and-troubleshooting.md) explains each one.
 
 ## Run it
 
@@ -54,6 +62,12 @@ run with a partially-configured platform.
 | Symptom | Cause |
 |---|---|
 | `No Gateway password` | `AAP_PASSWORD` not exported in this shell. |
+| `ansible-core 2.x is too old` | Core below 2.16. Needs a venv on Python 3.10+. |
 | `ansible.platform` not in the collection list | See installation in the [README](../README.md#install). |
+| `cannot import 'requests'` | `pip install -r requirements.txt`, in the active venv. |
+| `'aap_gateway' is undefined` | `group_vars/` moved out of `inventory/`. |
 | Certificate errors | `export AAP_VALIDATE_CERTS=false` for a self-signed demo pod. |
 | Connection refused / timeout | Wrong hostname, VPN down, or the pod is asleep. |
+
+Full explanations, and the fix for each, are in
+[Setup and troubleshooting](setup-and-troubleshooting.md).

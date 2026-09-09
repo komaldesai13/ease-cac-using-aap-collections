@@ -2,10 +2,13 @@
 reports/*.md
 
 # Local overrides. Never commit real credentials.
-group_vars/all.local.yml
+inventory/group_vars/all.local.yml
 .env
 *.vault
 vault-password*
+
+# Local virtualenv (see the Install section of README.md)
+.venv/
 
 # Ansible noise
 *.retry

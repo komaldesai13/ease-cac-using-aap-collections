@@ -33,7 +33,18 @@
           - aap_gateway.password | length > 0
         fail_msg: >-
           No Gateway password. Run:  export AAP_PASSWORD='...'
-          (or set aap_gateway.password in group_vars/all.yml)
+          (or set aap_gateway.password in inventory/group_vars/all.yml)
+
+    # ansible.platform declares requires_ansible ">=2.16.0". ansible-galaxy only
+    # warns on an older core, so catch it here rather than mid-demo.
+    - name: Check ansible-core is new enough for ansible.platform
+      ansible.builtin.assert:
+        that:
+          - ansible_version.full is version('2.16.0', '>=')
+        fail_msg: >-
+          ansible-core {{ ansible_version.full }} is too old — ansible.platform
+          needs >= 2.16.0 (which needs Python 3.10+ on the control node).
+          See the Install section of README.md.
 
     - name: Check the ansible.platform collection is installed
       ansible.builtin.command: ansible-galaxy collection list ansible.platform
@@ -44,6 +55,25 @@
     - name: Report the installed collection version
       ansible.builtin.debug:
         msg: "{{ collection_list.stdout_lines | select('search', 'ansible.platform') | list }}"
+
+    # ansible-galaxy does not install a collection's Python dependencies. The
+    # platform manager imports requests, and without it the gateway_api lookup
+    # below fails with a multiprocessing traceback that hides the real cause.
+    # ansible_playbook_python is the interpreter running ansible-playbook, which
+    # is the one the lookup plugin and the manager process actually use.
+    - name: Check the requests library is importable
+      ansible.builtin.command: "{{ ansible_playbook_python }} -c 'import requests'"
+      changed_when: false
+      failed_when: false
+      register: requests_probe
+
+    - name: Fail if requests is missing
+      ansible.builtin.assert:
+        that:
+          - requests_probe.rc == 0
+        fail_msg: >-
+          {{ ansible_playbook_python }} cannot import 'requests', which
+          ansible.platform needs. Run:  pip install -r requirements.txt
 
     # A read-only call is the cheapest possible proof that auth works.
     - name: Reach the Gateway and count organizations
